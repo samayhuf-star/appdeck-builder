@@ -1,0 +1,46 @@
+name: Launch app
+run-name: Launch ${{ inputs.repo_url }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo_url:
+        description: GitHub repo URL to build and publish
+        required: true
+      record_id:
+        description: AppDeck record id
+        required: true
+      app_id:
+        description: Existing Base44 site id to update (optional)
+        required: false
+        default: ""
+      subdomain:
+        description: Subdomain label (optional)
+        required: false
+        default: ""
+
+concurrency:
+  group: launch-${{ inputs.record_id }}
+  cancel-in-progress: true
+
+jobs:
+  launch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build and publish
+        env:
+          REPO_URL: ${{ inputs.repo_url }}
+          RECORD_ID: ${{ inputs.record_id }}
+          SUBDOMAIN: ${{ inputs.subdomain }}
+          APP_ID: ${{ inputs.app_id }}
+          BASE44_API_KEY: ${{ secrets.BASE44_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CALLBACK_URL: ${{ secrets.CALLBACK_URL }}
+          CALLBACK_SECRET: ${{ secrets.CALLBACK_SECRET }}
+          BASE_DOMAIN: ${{ vars.BASE_DOMAIN || 'appraze.shop' }}
+        run: node build.mjs
