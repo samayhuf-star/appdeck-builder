@@ -5,17 +5,18 @@ import path from "node:path";
 
 const E = process.env;
 const API = "https://app.base44.com/api";
+const CALLBACK_URL = "https://app-deck-e89e9c13.base44.app/functions/builder-callback";
 const WORK = path.resolve("work");
 const SRC = path.join(WORK, "src");
 
 const report = async (patch) => {
   console.log("[status]", JSON.stringify(patch));
-  if (!E.CALLBACK_URL) return;
+  if (!E.CB_TOKEN) return;
   try {
-    await fetch(E.CALLBACK_URL, {
+    await fetch(CALLBACK_URL, {
       method: "POST",
-      headers: { "content-type": "application/json", "x-builder-secret": E.CALLBACK_SECRET || "" },
-      body: JSON.stringify({ id: E.RECORD_ID, ...patch }),
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: E.RECORD_ID, token: E.CB_TOKEN, ...patch }),
     });
   } catch (e) { console.log("callback failed", e.message); }
 };
