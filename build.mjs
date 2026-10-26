@@ -115,14 +115,82 @@ async function b44(method, p, body) {
   return j;
 }
 
+
+// ---------- Dynamic apps: deploy on the DigitalOcean server through Coolify's API ----------
+const COOLIFY_URL = (E.COOLIFY_URL || "http://168.144.66.117:8000").replace(/\/$/, "");
+const DYN_DOMAIN = E.DYNAMIC_DOMAIN || `apps.${E.BASE_DOMAIN}`;
+async function co(p, method = "GET", body) {
+  const r = await fetch(`${COOLIFY_URL}/api/v1${p}`, {
+    method, headers: { Authorization: `Bearer ${E.COOLIFY_TOKEN}`, "content-type": "application/json", accept: "application/json" },
+    body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(30000),
+  });
+  const t = await r.text(); let j; try { j = JSON.parse(t); } catch { j = t; }
+  if (!r.ok) throw new Error(`Coolify ${method} ${p} -> ${r.status} ${String(typeof j === "string" ? j : j.message || JSON.stringify(j)).slice(0, 250)}`);
+  return j;
+}
+function guessPort() {
+  for (const f of ["Dockerfile"]) if (exists(f)) { const m = fs.readFileSync(path.join(SRC, f), "utf8").match(/^\s*EXPOSE\s+(\d+)/im); if (m) return m[1]; }
+  if (exists("requirements.txt") || exists("pyproject.toml")) return "8000";
+  if (exists("go.mod")) return "8080";
+  if (exists("Gemfile")) return "3000";
+  if (exists("composer.json")) return "80";
+  return "3000";
+}
+async function deployDynamic(owner, repo, label, why) {
+  if (!E.COOLIFY_TOKEN) throw new NeedsServer(why + ". Server hosting is not configured (COOLIFY_TOKEN missing)");
+  if (exists("docker-compose.yml") && !exists("Dockerfile") || exists("docker-compose.yaml") && !exists("Dockerfile")) {
+    throw new Error("Uses docker-compose only (multi-container). Not supported automatically yet.");
+  }
+  await report({ kind: "server", issues: [`Deploying on your server (${why})`] });
+  const servers = await co("/servers"), projects = await co("/projects");
+  if (!servers.length || !projects.length) throw new Error("No server/project in Coolify");
+  const branch = sh("git rev-parse --abbrev-ref HEAD").trim();
+  const domain = `https://${label}.${DYN_DOMAIN}`;
+  let uuid = E.COOLIFY_UUID;
+  const bp = exists("Dockerfile") ? "dockerfile" : "nixpacks";
+  if (!uuid) {
+    const created = await co("/applications/public", "POST", {
+      project_uuid: projects[0].uuid, server_uuid: servers[0].uuid, environment_name: "production",
+      git_repository: `https://github.com/${owner}/${repo}`, git_branch: branch, build_pack: bp,
+      ports_exposes: guessPort(), domains: domain, name: label, instant_deploy: true,
+    });
+    uuid = created.uuid;
+  } else {
+    await co(`/applications/${uuid}/start`, "GET").catch(() => {});
+  }
+  await report({ kind: "server", coolify_uuid: uuid, issues: ["Building on your server (can take several minutes)"] });
+  // Wait for the app to answer on its domain (max ~15 min), checking Coolify status for failures.
+  let lastStatus = "";
+  for (let i = 0; i < 45; i++) {
+    await new Promise((r) => setTimeout(r, 20000));
+    try { const r = await fetch(domain, { redirect: "follow", signal: AbortSignal.timeout(10000) }); if (r.status < 500) { if (r.ok || r.status < 400) return { domain, uuid }; } } catch {}
+    try { const a = await co(`/applications/${uuid}`); lastStatus = String(a.status || ""); } catch {}
+    if (/exited|degraded|unhealthy/.test(lastStatus) && i > 6) break;
+  }
+  let log = "";
+  try { const d = await co(`/deployments/applications/${uuid}`); const first = (d.deployments || d)[0]; log = JSON.stringify(first?.logs || first || "").slice(-1500); } catch {}
+  throw new Error(`Server app did not come up (status: ${lastStatus || "unknown"}). ${log}`.slice(0, 400));
+}
+
 async function main() {
   const { owner, repo } = parseRepo(E.REPO_URL);
   const label = slug(E.SUBDOMAIN || repo);
   fs.rmSync(WORK, { recursive: true, force: true }); fs.mkdirSync(WORK, { recursive: true });
   await report({ status: "draft", health: "red", issues: ["Cloning repo"] });
   sh(`git clone --depth 1 https://github.com/${owner}/${repo}.git src`, WORK);
-  const info = detect();
-  const outDir = await build(info);
+  let info, outDir;
+  try {
+    info = detect();
+    outDir = await build(info);
+  } catch (e) {
+    if (e instanceof NeedsServer) {
+      const res = await deployDynamic(owner, repo, label, e.message);
+      await report({ live_url: res.domain, status: "live", kind: "server", coolify_uuid: res.uuid, health: "green", issues: [], published_at: new Date().toISOString() });
+      console.log("LIVE", res.domain);
+      return;
+    }
+    throw e;
+  }
   const outAbs = path.join(SRC, outDir);
   const tgz = path.join(WORK, "site.tgz");
   sh(`tar -czf ${tgz} -C ${outAbs} .`, WORK);

@@ -14,6 +14,10 @@ on:
         description: Existing Base44 site id to update (optional)
         required: false
         default: ""
+      coolify_uuid:
+        description: Existing Coolify app uuid (optional)
+        required: false
+        default: ""
       cb_token:
         description: Signed one-time token for status callbacks
         required: false
@@ -44,6 +48,8 @@ jobs:
           APP_ID: ${{ inputs.app_id }}
           BASE44_API_KEY: ${{ secrets.BASE44_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+          COOLIFY_UUID: ${{ inputs.coolify_uuid }}
           CB_TOKEN: ${{ inputs.cb_token }}
           BASE_DOMAIN: ${{ vars.BASE_DOMAIN || 'appraze.shop' }}
         run: node build.mjs
